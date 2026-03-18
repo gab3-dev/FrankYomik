@@ -6,7 +6,14 @@ import re
 import requests
 
 from .config import OLLAMA_BASE_URL, TRANSLATE_MODEL, TRANSLATE_OPTIONS, TRANSLATE_THINK
-from kindle.translator import LANG_MAP, _clean_response
+from kindle.translator import LANG_MAP, _clean_response, review_translations as _manga_review
+
+def review_translations(
+    pairs: list[tuple[str, str]],
+    target_lang: str = "en",
+) -> dict[int, str]:
+    """Review webtoon translations — delegates to shared reviewer with Korean source."""
+    return _manga_review(pairs, source_lang="Korean", target_lang=target_lang)
 
 log = logging.getLogger(__name__)
 

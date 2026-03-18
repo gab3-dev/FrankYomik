@@ -18,7 +18,7 @@ from .bubble_detector import WebtoonBubble, detect_bubbles, extract_bubble_mask
 from .image_utils import split_tall_image, stitch_detections, stitch_rtdetr_detections
 from .inpainter import inpaint_bubble
 from .ocr import TextDetection, detect_and_read, is_valid_korean, ocr_within_bbox
-from .translator import translate, translate_sfx
+from .translator import translate, translate_sfx, review_translations
 
 log = logging.getLogger(__name__)
 
@@ -316,6 +316,17 @@ def validate_and_translate(page: WebtoonPageResult,
                 except Exception:
                     log.warning("Translation failed for '%s'",
                                 text, exc_info=True)
+
+    # Phase 3: review pass — check translations in page context
+    translated = [(i, r) for i, r in enumerate(page.regions)
+                  if r.english and r.english.strip()]
+    if len(translated) >= 2:
+        pairs = [(r.bubble.combined_text, r.english) for _, r in translated]
+        corrections = review_translations(pairs, target_lang=target_lang)
+        for pair_idx, corrected in corrections.items():
+            _, region = translated[pair_idx]
+            log.info("  Review corrected: %r -> %r", region.english, corrected)
+            region.english = corrected
 
 
 def _validate_group(

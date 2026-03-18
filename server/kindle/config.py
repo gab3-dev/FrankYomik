@@ -55,6 +55,9 @@ FONT_EN = _resolve_font(_fonts.get("en", "fonts/KomikaText-Regular.ttf"))
 FONT_EN_BOLD = _resolve_font(_fonts.get("en_bold", "fonts/KomikaText-Bold.ttf"))
 FONT_SFX = _resolve_font(_fonts.get("sfx", "fonts/BadaBoomBB.ttf"))
 
+# --- Translation review pass ---
+REVIEW_ENABLED = _ollama.get("review_pass", False)
+
 # --- Bubble detection (RT-DETR-v2) ---
 BUBBLE_PADDING = 5            # Pixels to pad inside bubble for text rendering
 

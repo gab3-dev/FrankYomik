@@ -5,6 +5,7 @@ ollama:
     temperature: 0.3
     num_predict: 1024
     think: false
+  review_pass: false        # Context-aware review of page translations
 
 fonts:
   jp: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"

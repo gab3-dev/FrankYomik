@@ -24,7 +24,7 @@ from kindle.processor import (
     render_page_to_bytes,
     transform_furigana,
 )
-from kindle.translator import translate
+from kindle.translator import translate, review_translations
 from kindle.text_renderer import render_english, render_furigana_vertical
 
 log = logging.getLogger(__name__)
@@ -371,6 +371,19 @@ def _process_manga(job: ProcessingJob,
                     except Exception:
                         log.warning("Translation failed for bubble %d",
                                     i, exc_info=True)
+
+        # Review pass: check translations in page context
+        translated = [(i, br) for i, br in enumerate(page.bubble_results)
+                      if isinstance(br.transformed, str) and br.transformed.strip()]
+        if len(translated) >= 2:
+            _report(progress_cb, "reviewing", f"{len(translated)} bubbles", 92)
+            pairs = [(br.ocr_text, br.transformed) for _, br in translated]
+            corrections = review_translations(pairs, target_lang=job.target_lang)
+            for pair_idx, corrected in corrections.items():
+                _, br = translated[pair_idx]
+                log.info("Review corrected bubble: %r -> %r",
+                         br.transformed, corrected)
+                br.transformed = corrected
 
     # Render to bytes
     _report(progress_cb, "rendering", "", 95)

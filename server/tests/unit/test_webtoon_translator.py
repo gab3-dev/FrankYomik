@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from webtoon.translator import translate, translate_sfx, _fallback_translate
+from webtoon.translator import translate, translate_sfx, review_translations, _fallback_translate
 
 
 class TestTranslate:
@@ -129,3 +129,37 @@ class TestTranslateSfx:
         payload = mock_post.call_args[1]["json"]
         prompt = payload["messages"][0]["content"]
         assert "Brazilian Portuguese" in prompt
+
+
+class TestReviewTranslations:
+    """Webtoon review_translations delegates to kindle with Korean source."""
+
+    @patch("kindle.translator.REVIEW_ENABLED", True)
+    @patch("kindle.translator.requests.post")
+    def test_delegates_with_korean_source(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "OK"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        pairs = [("안녕", "Hello"), ("뭐?", "What?")]
+        result = review_translations(pairs)
+        assert result == {}
+
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "Korean" in prompt
+
+    @patch("kindle.translator.REVIEW_ENABLED", True)
+    @patch("kindle.translator.requests.post")
+    def test_returns_corrections(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "message": {"content": "[1] Hi there"}
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        pairs = [("안녕", "Hello"), ("뭐?", "What?")]
+        result = review_translations(pairs)
+        assert result == {0: "Hi there"}
