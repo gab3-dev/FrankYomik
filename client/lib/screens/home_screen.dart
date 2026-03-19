@@ -4,6 +4,7 @@ import '../models/site_config.dart';
 import '../providers/connection_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/connection_banner.dart';
+import 'image_translate_screen.dart';
 import 'reader_screen.dart';
 import 'settings_screen.dart';
 import 'jobs_screen.dart';
@@ -108,6 +109,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                   const SizedBox(height: 12),
                   // Site cards
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.photo_library, size: 32),
+                      title: const Text('Translate Images'),
+                      subtitle: const Text('Pick images from your device'),
+                      trailing: const Icon(Icons.arrow_forward),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ImageTranslateScreen(),
+                        ),
+                      ),
+                    ),
+                  ),
                   ...SiteConfig.sites.map((site) => Card(
                         child: ListTile(
                           leading: Icon(
