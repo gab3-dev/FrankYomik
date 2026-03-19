@@ -1,5 +1,11 @@
 # Stage 1: Install Python dependencies
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder
+# GPU backend: set BUILD_GPU=rocm or BUILD_GPU=cuda (default: rocm)
+ARG BUILD_GPU=rocm
+
+FROM rocm/pytorch:rocm7.2_ubuntu22.04_py3.10_pytorch_release_2.10.0 AS builder-rocm
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04 AS builder-cuda
+
+FROM builder-${BUILD_GPU} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,15 +21,24 @@ WORKDIR /build
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install PyTorch matching the GPU backend before other deps
+ARG BUILD_GPU=rocm
+RUN if [ "$BUILD_GPU" = "rocm" ]; then \
+        pip install --no-cache-dir torch torchvision \
+            --index-url https://download.pytorch.org/whl/rocm6.3; \
+    else \
+        pip install --no-cache-dir torch torchvision; \
+    fi
+
 COPY server/requirements.txt .
-# Install deps excluding simple-lama-inpainting (its pinned deps conflict),
-# then install it separately with --no-deps
+# Install deps excluding simple-lama-inpainting (its pinned deps conflict)
+# and torch/torchvision (already installed above), then install lama with --no-deps
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -v simple-lama requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
+    grep -v -E 'simple-lama|^torch' requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
     pip install --no-cache-dir --no-deps simple-lama-inpainting
 
 # Stage 2: Runtime
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM builder-${BUILD_GPU} AS runtime
 
 ARG APP_UID=1026
 ARG APP_GID=1026

@@ -13,18 +13,19 @@ services:
     restart: unless-stopped
 
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:rocm
     ports:
       - "11434:11434"
     volumes:
       - ./server/models:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
+    group_add:
+      - video
+      - render
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 60s
@@ -34,10 +35,10 @@ services:
     restart: unless-stopped
 
   ollama-pull:
-    image: ollama/ollama
+    image: ollama/ollama:rocm
     environment:
       OLLAMA_HOST: http://ollama:11434
-    entrypoint: ["ollama", "pull", "qwen3:14b"]
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen3:latest}"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -80,25 +81,26 @@ services:
       context: .
       dockerfile: Dockerfile.worker
       args:
+        BUILD_GPU: ${BUILD_GPU:-rocm}
         APP_UID: ${APP_UID:-1026}
         APP_GID: ${APP_GID:-1026}
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       APP_UID: ${APP_UID:-1026}
       APP_GID: ${APP_GID:-1026}
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
       - ./cache:/app/server/cache
       - mangaocr-cache:/home/worker/.cache/manga_ocr
       - huggingface-cache:/home/worker/.cache/huggingface
       - easyocr-cache:/home/worker/.EasyOCR
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
     depends_on:
       redis:
         condition: service_healthy
