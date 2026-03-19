@@ -1,4 +1,8 @@
-# Frank Yomik
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
 
 This repo has two moving parts:
 
@@ -92,12 +96,23 @@ Everything except `/api/v1/health` is bearer-token protected.
 
 ## Local dev
 
+Go module: `github.com/akitaonrails/frank_manga`
+
 ### Server
 
 ```bash
 redis-server
+
+# API
 cd server && AUTH_TOKEN=secret go run .
-cd server && python -m worker --pipeline both
+
+# Worker (set up venv first time)
+cd server
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install simple-lama-inpainting --no-deps  # must use --no-deps
+python -m worker --pipeline both
 ```
 
 ### Client
@@ -108,13 +123,37 @@ flutter pub get
 flutter run -d linux
 ```
 
-### Useful tests
+### Tests
 
 ```bash
+# Go (needs Redis for full coverage, skips gracefully without it)
 cd server && go test ./...
-cd server && pytest tests/unit/test_page_cache.py
+cd server && go test -run TestHandleJobSubmit -v .    # single test
+
+# Python (PYTHONPATH is required when running outside venv activation)
+cd server && PYTHONPATH=. .venv/bin/pytest tests/unit/ -v
+cd server && .venv/bin/pytest tests/unit/test_page_cache.py -v  # single file
+cd server && .venv/bin/pytest tests/unit/test_page_cache.py::TestPageCacheV2::test_store_page -v  # single test
+cd server && .venv/bin/pytest tests/integration/ -v   # needs test images in docs/
+
+# Flutter
 cd client && flutter test
+cd client && flutter test test/services/api_service_test.dart  # single file
 ```
+
+### Lint
+
+```bash
+cd client && flutter analyze
+# Go: uses standard go fmt (no separate linter config)
+```
+
+### CI
+
+CI runs on push to master and PRs (`.github/workflows/ci.yml`):
+- `flutter analyze` + `flutter test`
+- `PYTHONPATH=. pytest tests/unit/ -v`
+- `go test -v .`
 
 ## Configuration that matters
 

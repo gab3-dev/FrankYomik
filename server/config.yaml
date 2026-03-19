@@ -1,6 +1,6 @@
 ollama:
   url: "http://localhost:11434"
-  translate_model: "qwen3:14b"
+  translate_model: "qwen3:latest"
   translate_options:
     temperature: 0.3
     num_predict: 1024

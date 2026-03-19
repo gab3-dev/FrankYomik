@@ -46,6 +46,7 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       APP_UID: ${APP_UID:-1026}
       APP_GID: ${APP_GID:-1026}
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     command: ["--pipeline", "both", "--redis-url", "redis://redis:6379"]
     volumes:
       - /home/akitaonrails/frank_yomik/cache:/app/server/cache
@@ -53,6 +54,12 @@ services:
       - /home/akitaonrails/frank_yomik/huggingface-cache:/home/worker/.cache/huggingface
       - /home/akitaonrails/frank_yomik/easyocr-cache:/home/worker/.EasyOCR
       - /home/akitaonrails/frank_yomik/config.prod.yaml:/app/server/config.yaml:ro
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
     depends_on:
       redis:
         condition: service_healthy
