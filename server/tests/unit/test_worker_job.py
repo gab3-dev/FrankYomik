@@ -200,7 +200,7 @@ class TestProcessJobManga:
         )
         process_job(job)
 
-        mock_translate.assert_called_once_with("テスト", "en")
+        mock_translate.assert_called_once_with("テスト", "en", "")
 
     @patch("worker.job.transform_furigana")
     @patch("worker.job.ocr_bubble")
@@ -250,7 +250,7 @@ class TestProcessJobManga:
 
         # Return English for first 2, empty for third
         translate_calls = [0]
-        def mock_translate_fn(text, target_lang="en"):
+        def mock_translate_fn(text, target_lang="en", scene_context=""):
             translate_calls[0] += 1
             if translate_calls[0] <= 2:
                 return "English text"
@@ -288,7 +288,7 @@ class TestProcessJobManga:
         result = process_job(job)
 
         assert result.status == "completed"
-        mock_translate.assert_called_once_with("テスト", "pt-br")
+        mock_translate.assert_called_once_with("テスト", "pt-br", "")
 
     @patch("worker.job.translate")
     @patch("worker.job.ocr_bubble")
@@ -629,7 +629,7 @@ class TestParallelTranslation:
             )
         mock_ocr.side_effect = mock_ocr_fn
 
-        def slow_translate(text, target_lang="en"):
+        def slow_translate(text, target_lang="en", scene_context=""):
             time.sleep(SLEEP_PER_CALL)
             return "English"
         mock_translate.side_effect = slow_translate

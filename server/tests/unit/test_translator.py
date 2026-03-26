@@ -89,3 +89,30 @@ class TestTranslate:
         result = _fallback_translate("こんにちは", "pt-br")
         assert result == "Olá"
         mock_gt_cls.assert_called_once_with(source="ja", target="pt")
+
+    @patch("kindle.translator.requests.post")
+    def test_scene_context_included_in_prompt(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "She said hello"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        result = translate("こんにちは", scene_context="A young woman greeting her friend")
+        assert result == "She said hello"
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "Scene context" in prompt
+        assert "A young woman greeting her friend" in prompt
+        assert "pronouns" in prompt.lower()
+
+    @patch("kindle.translator.requests.post")
+    def test_no_scene_context_omits_block(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "Hello"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        translate("こんにちは")
+        payload = mock_post.call_args[1]["json"]
+        prompt = payload["messages"][0]["content"]
+        assert "Scene context" not in prompt

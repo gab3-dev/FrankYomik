@@ -134,12 +134,22 @@ def clear_text_strokes(img: Image.Image, bbox: tuple[int, int, int, int],
 
     if mask is not None:
         img_array = np.array(img)
+        # Clamp to both image and mask bounds to avoid shape mismatches
+        img_h, img_w = img_array.shape[:2]
+        mask_h, mask_w = mask.shape[:2]
+        cy1 = max(0, cy1)
+        cx1 = max(0, cx1)
+        cy2 = min(img_h, min(mask_h, cy2))
+        cx2 = min(img_w, min(mask_w, cx2))
+        if cy2 <= cy1 or cx2 <= cx1:
+            return
         roi_mask = mask[cy1:cy2, cx1:cx2]
-        if roi_mask.size > 0:
+        img_slice = img_array[cy1:cy2, cx1:cx2]
+        if roi_mask.size > 0 and roi_mask.shape[:2] == img_slice.shape[:2]:
             # Sample the actual interior color from bright pixels inside
             # the mask — handles grayish scanned pages instead of using
             # pure white which creates visible patches.
-            masked_pixels = img_array[cy1:cy2, cx1:cx2][roi_mask > 0]
+            masked_pixels = img_slice[roi_mask > 0]
             if len(masked_pixels) > 0:
                 gray_vals = np.mean(masked_pixels, axis=1)
                 bright = masked_pixels[gray_vals > 180]
@@ -227,12 +237,23 @@ def cv2_to_pil(img: np.ndarray) -> Image.Image:
 
 
 def decode_image_bytes(data: bytes) -> tuple[np.ndarray, Image.Image]:
-    """Decode image bytes to OpenCV BGR + Pillow RGB."""
+    """Decode image bytes to OpenCV BGR + Pillow RGB.
+
+    Both outputs are guaranteed to have the same dimensions.  When the
+    decoders disagree (EXIF orientation, JPEG scaling differences, etc.)
+    the Pillow image is derived from the OpenCV array so the bubble mask
+    (built from img_cv) always matches the output image (built from img_pil).
+    """
     nparr = np.frombuffer(data, np.uint8)
     img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img_cv is None:
         raise ValueError("Could not decode image from bytes")
     img_pil = Image.open(io.BytesIO(data)).convert("RGB")
+    # Guard against dimension mismatch between decoders
+    cv_h, cv_w = img_cv.shape[:2]
+    pil_w, pil_h = img_pil.size
+    if cv_w != pil_w or cv_h != pil_h:
+        img_pil = cv2_to_pil(img_cv)
     return img_cv, img_pil
 
 

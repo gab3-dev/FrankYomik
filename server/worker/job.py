@@ -24,6 +24,7 @@ from kindle.processor import (
     render_page_to_bytes,
     transform_furigana,
 )
+from kindle.scene_describer import describe_scene
 from kindle.translator import translate
 from kindle.text_renderer import render_english, render_furigana_vertical
 
@@ -336,6 +337,12 @@ def _process_manga(job: ProcessingJob,
         br = ocr_bubble(page.img_pil, bubble_dict)
         page.bubble_results.append(br)
 
+    # Scene description (vision-based context for better pronoun selection)
+    scene_context = ""
+    if mode != PipelineMode.FURIGANA:
+        _report(progress_cb, "describing_scene", "", 62)
+        scene_context = describe_scene(page.img_pil)
+
     # Transform
     total_br = len(page.bubble_results)
     if mode == PipelineMode.FURIGANA:
@@ -354,7 +361,8 @@ def _process_manga(job: ProcessingJob,
                 max_workers=min(8, len(translatable))
             ) as pool:
                 futures = {
-                    pool.submit(translate, br.ocr_text, job.target_lang): (i, br)
+                    pool.submit(translate, br.ocr_text, job.target_lang,
+                                scene_context): (i, br)
                     for i, br in translatable
                 }
                 done = 0
@@ -429,8 +437,12 @@ def _process_webtoon(job: ProcessingJob,
     _report(progress_cb, "detecting_bubbles", "", 20)
     detect_bubbles_rtdetr(page)
 
+    _report(progress_cb, "describing_scene", "", 45)
+    scene_context = describe_scene(page.img_pil)
+
     _report(progress_cb, "translating", "", 50)
-    validate_and_translate(page, parallel=True, target_lang=job.target_lang)
+    validate_and_translate(page, parallel=True, target_lang=job.target_lang,
+                           scene_context=scene_context)
 
     _report(progress_cb, "rendering", "", 90)
     output_bytes = wt_render_bytes(page, target_lang=job.target_lang)
