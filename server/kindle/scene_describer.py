@@ -31,8 +31,13 @@ _SCENE_PROMPT = (
 )
 
 
-def describe_scene(page_image: Image.Image) -> str:
-    """Send the page image to the VL model and return a scene description.
+def describe_scene(page_image: Image.Image,
+                    bbox: tuple[int, int, int, int] | None = None) -> str:
+    """Send a page image (or cropped region) to the VL model for a scene description.
+
+    When *bbox* is provided, the image is cropped around that region with
+    generous padding (2x the bubble dimensions) so the VL model sees the
+    speaker and surrounding panel context rather than the entire page.
 
     Returns an empty string if scene description is disabled, the model
     does not support vision, or the call fails.
@@ -41,7 +46,8 @@ def describe_scene(page_image: Image.Image) -> str:
         return ""
 
     try:
-        img_b64 = _encode_image(page_image)
+        img = _crop_around_bbox(page_image, bbox) if bbox else page_image
+        img_b64 = _encode_image(img)
 
         payload = {
             "model": SCENE_MODEL,
@@ -76,6 +82,23 @@ def describe_scene(page_image: Image.Image) -> str:
     except Exception as e:
         log.warning("Scene description failed (non-fatal): %s", e)
         return ""
+
+
+def _crop_around_bbox(img: Image.Image,
+                      bbox: tuple[int, int, int, int]) -> Image.Image:
+    """Crop around a bbox with 2x padding on each side for panel context."""
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    pad_x = bw * 2
+    pad_y = bh * 2
+    w, h = img.size
+    crop_box = (
+        max(0, x1 - pad_x),
+        max(0, y1 - pad_y),
+        min(w, x2 + pad_x),
+        min(h, y2 + pad_y),
+    )
+    return img.crop(crop_box)
 
 
 def _encode_image(img: Image.Image) -> str:

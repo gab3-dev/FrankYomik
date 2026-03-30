@@ -14,7 +14,6 @@ LANG_MAP = {
     "pt-br": ("pt", "Brazilian Portuguese"),
 }
 
-
 def translate(japanese_text: str, target_lang: str = "en",
               scene_context: str = "") -> str:
     """Translate Japanese text to the target language using Ollama."""
@@ -43,6 +42,8 @@ def translate(japanese_text: str, target_lang: str = "en",
         f"\nJapanese: {japanese_text}"
     )
 
+    log.info("Prompt: %s", prompt)
+
     payload = {
         "model": TRANSLATE_MODEL,
         "messages": [{"role": "user", "content": prompt}],
@@ -62,6 +63,7 @@ def translate(japanese_text: str, target_lang: str = "en",
         raw = resp.json().get("message", {}).get("content", "")
         result = _clean_response(raw)
         if result:
+            log.info("Translation: %s", result)
             return result
     except Exception as e:
         log.warning("Ollama translation failed: %s, trying fallback", e)

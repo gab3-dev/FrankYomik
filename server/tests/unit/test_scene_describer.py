@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 from PIL import Image
 
-from kindle.scene_describer import describe_scene, _clean_description, _encode_image
+from kindle.scene_describer import describe_scene, _clean_description, _crop_around_bbox, _encode_image
 
 
 class TestCleanDescription:
@@ -122,3 +122,55 @@ class TestDescribeScene:
 
         payload = mock_post.call_args[1]["json"]
         assert payload["model"] == "gemma3:12b"
+
+    @patch("kindle.scene_describer.SCENE_DESCRIPTION_ENABLED", True)
+    @patch("kindle.scene_describer.requests.post")
+    def test_bbox_crops_image_before_sending(self, mock_post):
+        """When bbox is given, the image sent should be a cropped region."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "A girl speaking"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        img = Image.new("RGB", (800, 1200))
+        result = describe_scene(img, bbox=(200, 300, 400, 500))
+        assert result == "A girl speaking"
+        mock_post.assert_called_once()
+
+    @patch("kindle.scene_describer.SCENE_DESCRIPTION_ENABLED", True)
+    @patch("kindle.scene_describer.requests.post")
+    def test_no_bbox_sends_full_image(self, mock_post):
+        """Without bbox, the full image is sent."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": {"content": "Full page"}}
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        img = Image.new("RGB", (800, 1200))
+        describe_scene(img, bbox=None)
+        mock_post.assert_called_once()
+
+
+class TestCropAroundBbox:
+    def test_basic_crop(self):
+        img = Image.new("RGB", (1000, 1000))
+        cropped = _crop_around_bbox(img, (300, 300, 500, 500))
+        # bbox is 200x200, pad is 2x = 400 each side
+        # crop: (0, 0, 900, 900) clamped to image bounds
+        assert cropped.size[0] > 0
+        assert cropped.size[1] > 0
+        assert cropped.size[0] <= 1000
+        assert cropped.size[1] <= 1000
+
+    def test_clamps_to_image_bounds(self):
+        img = Image.new("RGB", (500, 500))
+        cropped = _crop_around_bbox(img, (10, 10, 50, 50))
+        # bbox 40x40, pad 80 each side → crop (0,0,130,130) clamped
+        assert cropped.size[0] <= 500
+        assert cropped.size[1] <= 500
+
+    def test_edge_bbox(self):
+        img = Image.new("RGB", (200, 200))
+        cropped = _crop_around_bbox(img, (0, 0, 50, 50))
+        assert cropped.size[0] > 0
+        assert cropped.size[1] > 0

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from kindle.config import EN_PAGE_FONT_DIVISOR, MIN_FONT_SIZE
 from kindle.bubble_detector import detect_bubbles, extract_bubble_mask_manga
+from kindle.text_detector import detect_panel_text, detect_small_bubbles
 from kindle.furigana import annotate as furigana_annotate
 from kindle.image_utils import (
     clear_text_in_region,
@@ -330,18 +331,22 @@ def _process_manga(job: ProcessingJob,
     _report(progress_cb, "detecting_bubbles", "", 10)
     detect_page_bubbles(page)
 
+    # Supplementary detection for text RT-DETR missed
+    _report(progress_cb, "detecting_bubbles", "panel text", 15)
+    bubble_bboxes = [b["bbox"] for b in page.bubbles_raw]
+    for bbox in detect_panel_text(page.img_cv, bubble_bboxes):
+        page.bubbles_raw.append({"bbox": bbox, "type": "artwork_text",
+                                 "score": 1.0, "is_artwork": True})
+    for bbox in detect_small_bubbles(page.img_cv, bubble_bboxes):
+        page.bubbles_raw.append({"bbox": bbox, "type": "speech_bubble",
+                                 "score": 1.0, "is_artwork": False})
+
     # OCR
     total = len(page.bubbles_raw)
     for i, bubble_dict in enumerate(page.bubbles_raw):
         _report(progress_cb, "ocr", f"{i+1}/{total} bubbles", 20 + int(40 * (i+1) / max(total, 1)))
         br = ocr_bubble(page.img_pil, bubble_dict)
         page.bubble_results.append(br)
-
-    # Scene description (vision-based context for better pronoun selection)
-    scene_context = ""
-    if mode != PipelineMode.FURIGANA:
-        _report(progress_cb, "describing_scene", "", 62)
-        scene_context = describe_scene(page.img_pil)
 
     # Transform
     total_br = len(page.bubble_results)
@@ -352,17 +357,24 @@ def _process_manga(job: ProcessingJob,
                     65 + int(25 * (i+1) / max(total_br, 1)))
             transform_furigana(br)
     else:
-        # Translation calls are independent HTTP POSTs — run in parallel
+        # Per-bubble scene description + translation in parallel.
+        # Each thread: crop around the bubble → VL model → translate.
         translatable = [(i, br) for i, br in enumerate(page.bubble_results)
                         if br.is_valid]
         _report(progress_cb, "translating", f"{len(translatable)} bubbles", 65)
+
+        def _describe_and_translate(br, page_image, target_lang):
+            scene = describe_scene(page_image, bbox=br.bbox)
+            log.info("Scene context for %s: %s", br.bbox, scene)
+            return translate(br.ocr_text, target_lang, scene)
+
         if translatable:
             with ThreadPoolExecutor(
                 max_workers=min(8, len(translatable))
             ) as pool:
                 futures = {
-                    pool.submit(translate, br.ocr_text, job.target_lang,
-                                scene_context): (i, br)
+                    pool.submit(_describe_and_translate, br,
+                                page.img_pil, job.target_lang): (i, br)
                     for i, br in translatable
                 }
                 done = 0
@@ -439,6 +451,7 @@ def _process_webtoon(job: ProcessingJob,
 
     _report(progress_cb, "describing_scene", "", 45)
     scene_context = describe_scene(page.img_pil)
+    log.info("Scene context: %s", scene_context)
 
     _report(progress_cb, "translating", "", 50)
     validate_and_translate(page, parallel=True, target_lang=job.target_lang,
