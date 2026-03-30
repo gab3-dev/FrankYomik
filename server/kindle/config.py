@@ -41,6 +41,10 @@ TRANSLATE_OPTIONS = {
 # think: false for qwen3 models; None means omit from request
 TRANSLATE_THINK = _translate_opts.get("think", None)
 
+# --- Scene description (vision-based context for translation) ---
+SCENE_DESCRIPTION_ENABLED = _ollama.get("scene_description", False)
+SCENE_MODEL = _ollama.get("scene_model", "gemma3:12b")
+
 # --- Font paths ---
 def _resolve_font(path: str) -> str:
     """Resolve font path: absolute paths pass through, relative resolved from project root."""

@@ -14,11 +14,20 @@ LANG_MAP = {
     "pt-br": ("pt", "Brazilian Portuguese"),
 }
 
-
-def translate(japanese_text: str, target_lang: str = "en") -> str:
+def translate(japanese_text: str, target_lang: str = "en",
+              scene_context: str = "") -> str:
     """Translate Japanese text to the target language using Ollama."""
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
+
+    context_block = ""
+    if scene_context:
+        context_block = (
+            f"Scene context (use this to choose correct pronouns and tone):\n"
+            f"{scene_context}\n\n"
+        )
+
     prompt = (
+        f"{context_block}"
         f"Translate this Japanese manga dialogue to natural, fluent {lang_name}.\n"
         "Guidelines:\n"
         "- Convey the MEANING and TONE, not a word-for-word literal translation.\n"
@@ -26,10 +35,14 @@ def translate(japanese_text: str, target_lang: str = "en") -> str:
         "- Keep Japanese names exactly as-is (e.g. Katsuki, Deku, Sensei).\n"
         "- Preserve Japanese nicknames and honorific-based names (e.g. Kacchan, "
         "Onee-chan) — do NOT translate or replace them.\n"
+        "- Use the scene context to pick the right pronouns (he/she/they) "
+        "and speaking style.\n"
         "- Keep it concise — speech bubbles have limited space.\n"
         f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nJapanese: {japanese_text}"
     )
+
+    log.info("Prompt: %s", prompt)
 
     payload = {
         "model": TRANSLATE_MODEL,
@@ -50,6 +63,7 @@ def translate(japanese_text: str, target_lang: str = "en") -> str:
         raw = resp.json().get("message", {}).get("content", "")
         result = _clean_response(raw)
         if result:
+            log.info("Translation: %s", result)
             return result
     except Exception as e:
         log.warning("Ollama translation failed: %s, trying fallback", e)

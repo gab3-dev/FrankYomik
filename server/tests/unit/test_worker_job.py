@@ -116,10 +116,13 @@ class TestValidPipelines:
 
 class TestProcessJobManga:
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_pipeline_returns_png(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
         mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
@@ -139,10 +142,12 @@ class TestProcessJobManga:
         assert result.processing_time_ms >= 0
 
     @patch("worker.job.transform_furigana")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_furigana_pipeline_returns_bytes(
-        self, mock_detect, mock_ocr, mock_furigana
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_furigana
     ):
         mock_ocr.return_value = BubbleResult(
             bbox=(10, 10, 50, 50),
@@ -158,12 +163,15 @@ class TestProcessJobManga:
         assert result.image_bytes is not None
 
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_calls_stages_in_order(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
-        """Verify pipeline stages are called: detect → ocr → translate."""
+        """Verify pipeline stages are called: detect → supplementary → ocr → translate."""
         mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
             bbox=(0, 0, 10, 10),
@@ -176,20 +184,23 @@ class TestProcessJobManga:
         process_job(job)
 
         mock_detect.assert_called_once()
-        # OCR is called for each bubble in bubbles_raw (default empty = 0 calls)
+        mock_panel.assert_called_once()
+        mock_small.assert_called_once()
 
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_uses_translate(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
-        """manga_translate should call translate() directly, not furigana."""
+        """manga_translate should call translate() with per-bubble scene context."""
         mock_translate.return_value = "Test"
         mock_ocr.return_value = BubbleResult(
             bbox=(0, 0, 10, 10), is_valid=True, ocr_text="テスト",
         )
-        # Simulate one bubble being detected
         def add_bubble(page):
             page.bubbles_raw = [{"bbox": (0, 0, 10, 10)}]
         mock_detect.side_effect = add_bubble
@@ -200,13 +211,23 @@ class TestProcessJobManga:
         )
         process_job(job)
 
-        mock_translate.assert_called_once_with("テスト", "en")
+        mock_translate.assert_called_once_with("テスト", "en", "")
+        # Scene describer is called per-bubble with bbox
+        mock_scene.assert_called_once()
+        _, kwargs = mock_scene.call_args
+        if mock_scene.call_args[1]:
+            assert "bbox" in mock_scene.call_args[1]
+        else:
+            # positional args: (image, bbox=...)
+            assert len(mock_scene.call_args[0]) >= 1
 
     @patch("worker.job.transform_furigana")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_furigana_uses_transform_furigana(
-        self, mock_detect, mock_ocr, mock_furigana
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_furigana
     ):
         """manga_furigana should call transform_furigana."""
         mock_ocr.return_value = BubbleResult(
@@ -225,10 +246,13 @@ class TestProcessJobManga:
         mock_furigana.assert_called_once()
 
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_bubble_count_reflects_transformed(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
         """bubble_count should count only bubbles with non-None transformed."""
         def add_bubbles(page):
@@ -250,7 +274,7 @@ class TestProcessJobManga:
 
         # Return English for first 2, empty for third
         translate_calls = [0]
-        def mock_translate_fn(text, target_lang="en"):
+        def mock_translate_fn(text, target_lang="en", scene_context=""):
             translate_calls[0] += 1
             if translate_calls[0] <= 2:
                 return "English text"
@@ -266,10 +290,13 @@ class TestProcessJobManga:
         assert result.bubble_count == 2
 
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_passes_target_lang(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
         """manga_translate with pt-br should pass target_lang to translate()."""
         mock_translate.return_value = "Teste"
@@ -288,13 +315,16 @@ class TestProcessJobManga:
         result = process_job(job)
 
         assert result.status == "completed"
-        mock_translate.assert_called_once_with("テスト", "pt-br")
+        mock_translate.assert_called_once_with("テスト", "pt-br", "")
 
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_metadata_payload_structure(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
         """metadata_payload should have correct schema and user dict shape."""
         def add_bubble(page):
@@ -607,10 +637,13 @@ class TestRerenderFromMetadata:
 
 class TestParallelTranslation:
     @patch("worker.job.translate")
+    @patch("worker.job.describe_scene", return_value="")
+    @patch("worker.job.detect_small_bubbles", return_value=[])
+    @patch("worker.job.detect_panel_text", return_value=[])
     @patch("worker.job.ocr_bubble")
     @patch("worker.job.detect_page_bubbles")
     def test_translate_calls_are_parallel(
-        self, mock_detect, mock_ocr, mock_translate
+        self, mock_detect, mock_ocr, mock_panel, mock_small, mock_scene, mock_translate
     ):
         """Translation of multiple bubbles should run in parallel threads."""
         NUM_BUBBLES = 5
@@ -629,7 +662,7 @@ class TestParallelTranslation:
             )
         mock_ocr.side_effect = mock_ocr_fn
 
-        def slow_translate(text, target_lang="en"):
+        def slow_translate(text, target_lang="en", scene_context=""):
             time.sleep(SLEEP_PER_CALL)
             return "English"
         mock_translate.side_effect = slow_translate

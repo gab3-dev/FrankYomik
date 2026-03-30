@@ -258,7 +258,8 @@ def _detect_subgroups(detections: list[TextDetection],
 
 def validate_and_translate(page: WebtoonPageResult,
                            parallel: bool = False,
-                           target_lang: str = "en") -> None:
+                           target_lang: str = "en",
+                           scene_context: str = "") -> None:
     """Stage 4: Validate Korean text and translate.
 
     When a bubble contains multiple distinct text groups (separated by a
@@ -288,12 +289,14 @@ def validate_and_translate(page: WebtoonPageResult,
 
         if len(groups) == 1:
             _validate_group(page, bubble, bubble.text_regions, None, pending,
-                            defer=parallel, target_lang=target_lang)
+                            defer=parallel, target_lang=target_lang,
+                            scene_context=scene_context)
         else:
             log.info("  Split bubble into %d sub-groups", len(groups))
             for group_dets in groups:
                 _validate_group(page, bubble, group_dets, group_dets, pending,
-                                defer=parallel, target_lang=target_lang)
+                                defer=parallel, target_lang=target_lang,
+                                scene_context=scene_context)
 
     # Phase 2: translate (parallel or already done inline)
     if parallel and pending:
@@ -301,7 +304,8 @@ def validate_and_translate(page: WebtoonPageResult,
             max_workers=min(8, len(pending))
         ) as pool:
             futures = {
-                pool.submit(translate, text, target_lang): (region, text)
+                pool.submit(translate, text, target_lang,
+                            scene_context): (region, text)
                 for region, text in pending
             }
             for future in as_completed(futures):
@@ -326,6 +330,7 @@ def _validate_group(
     pending: list[tuple[WebtoonTextRegion, str]],
     defer: bool = False,
     target_lang: str = "en",
+    scene_context: str = "",
 ) -> None:
     """Validate a group of detections and translate or defer translation.
 
@@ -349,7 +354,7 @@ def _validate_group(
     if defer:
         pending.append((region, group_text))
     else:
-        english = translate(group_text, target_lang)
+        english = translate(group_text, target_lang, scene_context)
         if english.strip():
             region.english = english
             log.info("  EN: %s", english)

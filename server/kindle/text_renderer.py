@@ -315,7 +315,12 @@ def _render_vertical_sfx(img: Image.Image, bbox: tuple[int, int, int, int],
 
     if mask is not None:
         overlay_arr = np.array(overlay)
-        overlay_arr[:, :, 3][mask == 0] = 0
+        m = mask
+        if m.shape[:2] != overlay_arr.shape[:2]:
+            import cv2
+            m = cv2.resize(m, (overlay_arr.shape[1], overlay_arr.shape[0]),
+                           interpolation=cv2.INTER_NEAREST)
+        overlay_arr[:, :, 3][m == 0] = 0
         overlay = Image.fromarray(overlay_arr)
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
@@ -405,7 +410,12 @@ def _render_horizontal_english(img: Image.Image, bbox: tuple[int, int, int, int]
 
     if mask is not None:
         overlay_arr = np.array(overlay)
-        overlay_arr[:, :, 3][mask == 0] = 0
+        m = mask
+        if m.shape[:2] != overlay_arr.shape[:2]:
+            import cv2
+            m = cv2.resize(m, (overlay_arr.shape[1], overlay_arr.shape[0]),
+                           interpolation=cv2.INTER_NEAREST)
+        overlay_arr[:, :, 3][m == 0] = 0
         overlay = Image.fromarray(overlay_arr)
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 
@@ -686,7 +696,12 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
 
     if mask is not None:
         overlay_arr = np.array(overlay)
-        overlay_arr[:, :, 3][mask == 0] = 0
+        m = mask
+        if m.shape[:2] != overlay_arr.shape[:2]:
+            import cv2
+            m = cv2.resize(m, (overlay_arr.shape[1], overlay_arr.shape[0]),
+                           interpolation=cv2.INTER_NEAREST)
+        overlay_arr[:, :, 3][m == 0] = 0
         overlay = Image.fromarray(overlay_arr)
         img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
 

@@ -11,11 +11,22 @@ from kindle.translator import LANG_MAP, _clean_response
 log = logging.getLogger(__name__)
 
 
-def translate(korean_text: str, target_lang: str = "en") -> str:
+def translate(korean_text: str, target_lang: str = "en",
+              scene_context: str = "") -> str:
     """Translate Korean text to the target language using Ollama."""
     _, lang_name = LANG_MAP.get(target_lang, ("en", "English"))
+
+    context_block = ""
+    if scene_context:
+        context_block = (
+            f"Scene context (use this to choose correct pronouns and tone):\n"
+            f"{scene_context}\n\n"
+        )
+
     prompt = (
+        f"{context_block}"
         f"Translate this Korean manhwa/webtoon dialogue to natural {lang_name}.\n"
+        "Use the scene context to pick the right pronouns and speaking style.\n"
         "Keep it concise and suitable for a speech bubble.\n"
         f"Output ONLY the {lang_name} translation, nothing else.\n"
         f"\nKorean: {korean_text}"

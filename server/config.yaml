@@ -5,6 +5,8 @@ ollama:
     temperature: 0.3
     num_predict: 1024
     think: false
+  scene_description: true
+  scene_model: "gemma3:12b"
 
 fonts:
   jp: "fonts/genei_antique/GenEiAntiquePv5-M.ttf"
