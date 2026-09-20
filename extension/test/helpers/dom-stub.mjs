@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { webcrypto } from 'node:crypto';
 
 const contentDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../src/content');
 
@@ -199,6 +200,7 @@ export function loadContentScripts(scripts, images, options = {}) {
 
   const sandbox = {
     window,
+    crypto: webcrypto,
     location: window.location,
     document,
     console: options.onWarn

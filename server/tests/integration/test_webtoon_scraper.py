@@ -1,8 +1,10 @@
 """Integration tests for webtoon scraper (URL parsing and smart-skip)."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from webtoon.scraper import parse_naver_url, _download_images, _guess_extension
+from webtoon.scraper import parse_naver_url, download_episode, _download_images, _guess_extension
 
 
 class TestParseNaverUrl:
@@ -11,7 +13,7 @@ class TestParseNaverUrl:
         result = parse_naver_url(url)
         assert result["title_id"] == "747269"
         assert result["episode_no"] == "297"
-        assert "m.comic.naver.com" in result["base_url"]
+        assert result["base_url"] == "https://m.comic.naver.com"
 
     def test_desktop_url(self):
         url = "https://comic.naver.com/webtoon/detail?titleId=747269&no=297"
@@ -28,6 +30,35 @@ class TestParseNaverUrl:
         result = parse_naver_url(url)
         assert result["title_id"] == "747269"
         assert result["episode_no"] is None
+
+    @pytest.mark.parametrize("url", [
+        "https://m.comic.naver.com.evil.example/webtoon/detail?titleId=747269&no=297",
+        "https://evil.example/?next=m.comic.naver.com&titleId=747269&no=297",
+        "http://comic.naver.com/webtoon/detail?titleId=747269&no=297",
+        "https://comic.naver.com:8443/webtoon/detail?titleId=747269&no=297",
+        "https://user@comic.naver.com/webtoon/detail?titleId=747269&no=297",
+    ])
+    def test_rejects_non_naver_urls(self, url):
+        with pytest.raises(ValueError, match="HTTPS Naver"):
+            parse_naver_url(url)
+
+    @pytest.mark.parametrize("query", [
+        "titleId=../outside&no=297",
+        "titleId=747269&no=../../outside",
+        "titleId=747269&no=not-a-number",
+    ])
+    def test_rejects_unsafe_identifiers(self, query):
+        with pytest.raises(ValueError, match="numeric"):
+            parse_naver_url(f"https://comic.naver.com/webtoon/detail?{query}")
+
+    def test_browser_receives_canonical_url(self, tmp_path):
+        url = "https://comic.naver.com/other?titleId=747269&no=297&extra=ignored"
+        with patch("webtoon.scraper._output_dir_for_episode", return_value=str(tmp_path)), \
+             patch("webtoon.scraper._browser_get_urls", new_callable=AsyncMock) as browser:
+            browser.return_value = ([], "test")
+            assert download_episode(url) == []
+        browser.assert_awaited_once_with(
+            "https://comic.naver.com/webtoon/detail?titleId=747269&no=297")
 
 
 class TestGuessExtension:

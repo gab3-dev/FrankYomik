@@ -48,7 +48,7 @@
 
   let started = false;
   let settings = {};
-  let sessionId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  let sessionId = crypto.randomUUID();
   let pageCounter = 0;
   let lastBlob = '';
   let lastRect = null;

@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -31,18 +32,24 @@ def parse_naver_url(url: str) -> dict:
       https://comic.naver.com/webtoon/detail?titleId=747269&no=297
     """
     parsed = urlparse(url)
+    if (parsed.scheme != "https" or parsed.hostname not in {
+        "comic.naver.com", "m.comic.naver.com"
+    } or parsed.port is not None or parsed.username or parsed.password):
+        raise ValueError("Expected an HTTPS Naver Webtoon URL")
     params = parse_qs(parsed.query)
 
     title_id = params.get("titleId", [None])[0]
     episode_no = params.get("no", [None])[0]
 
-    if not title_id:
-        raise ValueError(f"Could not extract titleId from URL: {url}")
+    if not title_id or not re.fullmatch(r"[0-9]{1,12}", title_id):
+        raise ValueError("Expected a numeric titleId")
+    if episode_no is not None and not re.fullmatch(r"[0-9]{1,12}", episode_no):
+        raise ValueError("Expected a numeric episode number")
 
     return {
         "title_id": title_id,
         "episode_no": episode_no,
-        "base_url": f"{parsed.scheme}://{parsed.netloc}",
+        "base_url": f"https://{parsed.hostname}",
     }
 
 
@@ -206,7 +213,9 @@ def download_episode(url: str) -> list[str]:
     log.info("Output directory: %s", out_dir)
 
     # Phase 1: Browser extracts image URLs + real User-Agent
-    image_urls, browser_ua = asyncio.run(_browser_get_urls(url))
+    chapter = f"&no={parsed['episode_no']}" if parsed["episode_no"] else ""
+    episode_url = f"{parsed['base_url']}/webtoon/detail?titleId={parsed['title_id']}{chapter}"
+    image_urls, browser_ua = asyncio.run(_browser_get_urls(episode_url))
     log.info("Found %d images", len(image_urls))
 
     if not image_urls:

@@ -453,6 +453,9 @@ test('a settled page is captured', async () => {
 
   assert.equal(sent.filter((m) => m.type === 'SUBMIT_CAPTURE').length, 1,
     'a page that stops changing is captured normally');
+  const capture = sent.find((m) => m.type === 'SUBMIT_CAPTURE');
+  assert.match(capture.metadata.latestGroup,
+    /^kindle:B0ABCDEFGH:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
 
 // --- the page the reader can actually see ------------------------------------
