@@ -2,14 +2,21 @@
 
 This repo has two moving parts:
 
-- `server/`: Go API plus Python workers for manga and webtoon processing
-- `client/`: Flutter reader app that wraps Kindle and Naver Webtoon in a WebView
+- `server/`: Go API plus Python workers for manga, webtoon, and study-PDF processing
+- `client/`: Flutter reader app, Kindle/Naver WebView readers, and local PDF study library
 
 If you need to get oriented fast, start with `server/main.go`, `server/handlers.go`, `server/worker/consumer.py`, and `client/lib/screens/reader_screen.dart`.
 
 ## What the system does
 
 The API accepts page images, hashes them, deduplicates them, and queues jobs in Redis. Python workers pull from Redis, run OCR and translation, render a new image, cache the result on disk, and publish completion events. The Flutter client watches those events and overlays translated images back into the reader.
+
+The separate study-PDF path accepts a whole PDF, prioritizes the active page,
+extracts native text/glyph boxes or OCRs scanned pages, and returns normalized
+page layouts. The original upload is staged under `cache/study/incoming/` and
+deleted after page processing; Redis layout results expire after 24 hours and
+the Flutter client persists layouts locally. Dictionary word/kanji lookup is
+performed against the on-device SQLite index, not the translation worker.
 
 There are four pipelines:
 
@@ -24,12 +31,14 @@ There are four pipelines:
 
 - `server/main.go`: boot, env parsing, Redis wiring, graceful shutdown
 - `server/handlers.go`: REST API, cache endpoints, metadata patching, health
+- `server/study.go`: temporary PDF upload, page-layout/status API, page priority
 - `server/middleware.go`: bearer-token auth
 - `server/queue.go`: Redis Streams submission and dedup
 - `server/results.go`: Redis-backed job status and image retrieval
 - `server/cache.go`: disk cache v2, content-addressed objects, manifest/ref layout
 - `server/websocket.go`: websocket upgrade and origin checks
 - `server/worker/consumer.py`: Redis stream consumer, result publishing, cache writes
+- `server/worker/study_pdf.py`: PDF text extraction, Japanese OCR fallback, glyph geometry
 - `server/worker/job.py`: pipeline routing and metadata payload generation
 - `server/worker/page_cache.py`: Python-side cache v2 writer/reader
 - `server/kindle/`: manga OCR, translation, rendering, furigana, bubble detection
@@ -41,6 +50,10 @@ There are four pipelines:
 ### Client
 
 - `client/lib/screens/home_screen.dart`: launcher with arbitrary URL entry
+- `client/lib/screens/study_library_screen.dart`: local PDF import/library and dictionary install
+- `client/lib/screens/study_reader_screen.dart`: PDF reader, OCR polling, tap-to-lookup
+- `client/lib/services/study_library_service.dart`: local PDFs, reading progress, OCR layout cache
+- `client/lib/services/local_japanese_dictionary.dart`: local JMdict/KANJIDIC2 SQLite index
 - `client/lib/screens/reader_screen.dart`: main runtime, capture flow, overlay logic
 - `client/lib/services/api_service.dart`: HTTP client for job submit/status/image download
 - `client/lib/services/websocket_service.dart`: realtime progress/completion feed
@@ -69,6 +82,23 @@ There are four pipelines:
 2. `NaverWebtoonStrategy` discovers page images and reports them back to Dart.
 3. The client captures each image through JS `fetch()` first, then falls back to an app-side HTTP fetch if needed.
 4. The worker runs the webtoon pipeline and returns the translated image.
+
+### Study PDF flow
+
+1. Flutter copies an imported PDF into app-managed storage and uploads it once
+   to `POST /api/v1/study/documents`.
+2. Go stages the PDF in the shared cache volume and queues a `study_ingest`
+   message on the existing high-priority stream.
+3. The worker queues the reader's active page high and remaining pages low.
+   Text-layer pages return PDFium character boxes; image-only pages are rendered
+   and read with EasyOCR's Japanese model. Fugashi/UniDic attaches word lemmas
+   and readings to each page layout.
+4. Flutter fetches page layouts from the study endpoints and caches them in its
+   local study database. Taps hit-test native PDF boxes or OCR glyph boxes and
+   show local dictionary readings/meanings.
+5. The worker deletes the staged PDF once all pages have completed; Redis page
+   layouts expire after 24 hours. Seven-day startup cleanup removes abandoned
+   staged uploads.
 
 ## Reading modes
 
@@ -501,6 +531,10 @@ Main endpoints:
 - `DELETE /api/v1/jobs/:id`
 - `GET /api/v1/cache/...`
 - `PATCH /api/v1/cache/by-hash/:pipeline/:source_hash/meta`
+- `POST /api/v1/study/documents`
+- `GET /api/v1/study/documents/:id`
+- `GET /api/v1/study/documents/:id/pages/:page`
+- `POST /api/v1/study/documents/:id/pages/:page/prioritize`
 - `GET /api/v1/health`
 - `GET /api/v1/ws`
 
@@ -529,6 +563,7 @@ flutter run -d linux
 ```bash
 cd server && go test ./...
 cd server && pytest tests/unit/test_page_cache.py
+cd server && pytest tests/unit/test_study_pdf.py
 cd client && flutter test
 ```
 
@@ -537,6 +572,7 @@ cd client && flutter test
 - `AUTH_TOKEN`: required by the API
 - `REDIS_URL`: Redis connection for the API
 - `CACHE_DIR`: shared disk cache path for the API
+- `STUDY_PDF_MAX_SIZE_MB`: maximum staged study-PDF upload (default 100)
 - `server/config.yaml`: worker-side config for Ollama, OCR, fonts, cache, and webtoon settings
 - `docker-compose.yml`: the normal multi-service deployment path
 

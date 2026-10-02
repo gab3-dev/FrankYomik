@@ -7,6 +7,7 @@ import socket
 
 from kindle.config import _load_yaml_config
 from .consumer import Consumer
+from .study_pdf import cleanup_stale_uploads
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ def main() -> None:
     _preload_models(args.pipeline)
 
     cache_dir = worker_cfg.get("cache_dir", "./cache")
+    stale_uploads = cleanup_stale_uploads(cache_dir)
+    if stale_uploads:
+        log.info("Removed %d stale study PDF upload(s)", stale_uploads)
 
     # Stream consumer names must be unique within the group; with multiple
     # replicas the container's hostname (set by docker compose) gives us that.

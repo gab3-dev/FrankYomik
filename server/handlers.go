@@ -34,6 +34,7 @@ type Server struct {
 	// Configurable limits (set from env vars in main.go)
 	maxImageSize       int64 // max upload size in bytes (default: 20 << 20)
 	maxDebugUploadSize int64 // max debug pair upload size in bytes (default: 50 << 20)
+	maxStudyUploadSize int64 // max study PDF upload size in bytes (default: 100 << 20)
 	streamMaxLenHigh   int64 // XADD MAXLEN for high-priority stream
 	streamMaxLenLow    int64 // XADD MAXLEN for low-priority stream
 
@@ -53,8 +54,9 @@ func NewServer(rdb *redis.Client, cacheDir string) *Server {
 		results:            NewResults(rdb),
 		cache:              cache,
 		rdb:                rdb,
-		maxImageSize:       20 << 20, // 20 MiB default
-		maxDebugUploadSize: 50 << 20, // 50 MiB default
+		maxImageSize:       20 << 20,  // 20 MiB default
+		maxDebugUploadSize: 50 << 20,  // 50 MiB default
+		maxStudyUploadSize: 100 << 20, // 100 MiB default
 		subscribers:        make(map[string]map[chan WSNotification]struct{}),
 	}
 }
@@ -74,6 +76,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/debug/pages", s.handleListDebugPages)
 	mux.HandleFunc("GET /api/v1/debug/pages/{id}", s.handleGetDebugPage)
 	mux.HandleFunc("GET /api/v1/debug/pages/{id}/{kind}", s.handleGetDebugPageImage)
+	mux.HandleFunc("POST /api/v1/study/documents", s.handleUploadStudyDocument)
+	mux.HandleFunc("GET /api/v1/study/documents/{id}", s.handleGetStudyDocument)
+	mux.HandleFunc("GET /api/v1/study/documents/{id}/pages/{page}", s.handleGetStudyPage)
+	mux.HandleFunc("POST /api/v1/study/documents/{id}/pages/{page}/prioritize", s.handlePrioritizeStudyPage)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
 }

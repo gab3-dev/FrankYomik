@@ -44,6 +44,7 @@ func main() {
 	// Configurable limits from environment
 	maxImageSizeMB := getEnvInt("MAX_IMAGE_SIZE_MB", 20)
 	maxDebugUploadMB := getEnvInt("DEBUG_MAX_UPLOAD_MB", 50)
+	maxStudyUploadMB := getEnvInt("STUDY_PDF_MAX_SIZE_MB", 100)
 	streamMaxLenHigh := getEnvInt("STREAM_MAXLEN_HIGH", 500)
 	streamMaxLenLow := getEnvInt("STREAM_MAXLEN_LOW", 1000)
 
@@ -51,6 +52,7 @@ func main() {
 	server := NewServer(rdb, cacheDir)
 	server.maxImageSize = int64(maxImageSizeMB) << 20
 	server.maxDebugUploadSize = int64(maxDebugUploadMB) << 20
+	server.maxStudyUploadSize = int64(maxStudyUploadMB) << 20
 	server.streamMaxLenHigh = int64(streamMaxLenHigh)
 	server.streamMaxLenLow = int64(streamMaxLenLow)
 	server.queue.maxLenHigh = server.streamMaxLenHigh

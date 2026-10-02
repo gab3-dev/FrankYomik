@@ -1,5 +1,7 @@
 """Redis stream consumer for processing jobs with priority queues."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -48,6 +50,13 @@ LOW_POLL_BLOCK_MS = 1000
 PENDING_CLAIM_INTERVAL_SECONDS = 30
 PENDING_MIN_IDLE_MS = 60_000
 PENDING_CLAIM_COUNT = 10
+
+# Study PDF source files are staged under cache_dir/study/incoming and deleted
+# after every page has either produced a layout or failed. Page-layout JSON is
+# delivery state, not durable translation cache data.
+STUDY_DOCUMENT_PREFIX = "frank:study:document:"
+STUDY_RESULT_TTL_SECONDS = 24 * 60 * 60
+STUDY_MAX_PAGES = 500
 
 
 def _redact_url(url_str: str) -> str:
@@ -247,6 +256,10 @@ class Consumer:
     def _process_message(self, stream: str, msg_id: bytes,
                          fields: dict) -> str:
         """Process a single job message from the stream."""
+        task_type = self._decode_field(fields, b"task_type")
+        if task_type in {"study_ingest", "study_page"}:
+            return self._process_study_message(stream, msg_id, fields, task_type)
+
         job_id = self._decode_field(fields, b"job_id")
         pipeline = self._decode_field(fields, b"pipeline")
         image_key = self._decode_field(fields, b"image_key")
@@ -368,6 +381,194 @@ class Consumer:
                  job_id, result.status, result.bubble_count,
                  result.processing_time_ms)
         return "processed"
+
+    def _process_study_message(self, stream: str, msg_id: bytes,
+                               fields: dict, task_type: str) -> str:
+        """Ingest a staged PDF or produce one positioned-text page result."""
+        document_id = self._decode_field(fields, b"document_id")
+        if not document_id or not all(c in "0123456789abcdef" for c in document_id) or len(document_id) != 32:
+            log.warning("Malformed study message %s: invalid document id", msg_id)
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+
+        status_key = f"{STUDY_DOCUMENT_PREFIX}{document_id}"
+        status_raw = self._rdb.get(status_key)
+        if not status_raw:
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+        if isinstance(status_raw, bytes):
+            status_raw = status_raw.decode("utf-8", errors="replace")
+        try:
+            document_status = json.loads(status_raw)
+        except (TypeError, json.JSONDecodeError):
+            log.error("Invalid study status for %s", document_id)
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+        if document_status.get("status") in {"failed", "completed"} and task_type == "study_page":
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+
+        pdf_path = os.path.join(self.cache_dir, "study", "incoming", f"{document_id}.pdf")
+        if task_type == "study_ingest":
+            return self._ingest_study_document(
+                stream, msg_id, fields, document_id, pdf_path,
+                status_key, document_status,
+            )
+
+        page_number = self._decode_field(fields, b"page_number")
+        try:
+            page_number = int(page_number)
+        except (TypeError, ValueError):
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+        page_count = int(document_status.get("page_count") or 0)
+        if page_count == 0:
+            # A client can prioritize a page while the ingest task is still
+            # opening the PDF. Leave it in the PEL for retry after page_count
+            # is published instead of losing the requested priority.
+            return "deferred"
+        if page_number < 1 or page_number > page_count:
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+
+        result_key = f"{status_key}:page:{page_number}:layout"
+        if self._rdb.exists(result_key):
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+        lock_key = f"{status_key}:page:{page_number}:lock"
+        if not self._rdb.set(lock_key, self.consumer_name, nx=True, ex=3600):
+            # Leave this duplicate pending. If the owner finishes, a later
+            # claim sees its result and ACKs; if the owner died, the lock
+            # expires and this delivery can recover the page.
+            return "deferred"
+
+        page_status_key = f"{status_key}:page:{page_number}:status"
+        self._rdb.set(
+            page_status_key,
+            json.dumps({"status": "processing"}),
+            ex=STUDY_RESULT_TTL_SECONDS,
+        )
+        try:
+            if not os.path.isfile(pdf_path):
+                raise FileNotFoundError("staged PDF is no longer available")
+            from .study_pdf import inspect_pdf_page
+
+            layout = inspect_pdf_page(pdf_path, page_number)
+            # Escaping unicode keeps malformed PDF surrogate text from failing
+            # Redis' UTF-8 response encoding. JSON clients restore the glyphs.
+            payload = json.dumps(layout, ensure_ascii=True, separators=(",", ":"))
+            self._rdb.set(result_key, payload, ex=STUDY_RESULT_TTL_SECONDS)
+            self._rdb.set(
+                page_status_key,
+                json.dumps({"status": "completed"}),
+                ex=STUDY_RESULT_TTL_SECONDS,
+            )
+        except Exception as exc:
+            log.exception("Study PDF %s page %d failed", document_id, page_number)
+            failure = {
+                "schema_version": 1,
+                "page_number": page_number,
+                "status": "failed",
+                "error": str(exc),
+            }
+            self._rdb.set(
+                result_key,
+                json.dumps(failure, ensure_ascii=False),
+                ex=STUDY_RESULT_TTL_SECONDS,
+            )
+            self._rdb.set(
+                page_status_key,
+                json.dumps({"status": "failed", "error": str(exc)}),
+                ex=STUDY_RESULT_TTL_SECONDS,
+            )
+
+        completed_key = f"{status_key}:completed-pages"
+        self._rdb.sadd(completed_key, str(page_number))
+        self._rdb.expire(completed_key, STUDY_RESULT_TTL_SECONDS)
+        completed_pages = int(self._rdb.scard(completed_key))
+        page_count = int(document_status.get("page_count") or 0)
+        document_status["completed_pages"] = completed_pages
+        document_status["status"] = "completed" if completed_pages >= page_count else "processing"
+        self._rdb.set(
+            status_key,
+            json.dumps(document_status, ensure_ascii=False),
+            ex=STUDY_RESULT_TTL_SECONDS,
+        )
+        if page_count > 0 and completed_pages >= page_count:
+            try:
+                os.remove(pdf_path)
+                log.info("Removed staged PDF after OCR: %s", document_id)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.warning("Could not remove staged PDF %s", document_id, exc_info=True)
+
+        self._rdb.delete(lock_key)
+        self._rdb.xack(stream, self.consumer_group, msg_id)
+        return "processed"
+
+    def _ingest_study_document(self, stream: str, msg_id: bytes,
+                               fields: dict, document_id: str, pdf_path: str,
+                               status_key: str, document_status: dict) -> str:
+        """Validate one PDF and enqueue its requested page before the rest."""
+        if document_status.get("status") == "completed":
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
+        try:
+            from .study_pdf import inspect_pdf_page_count
+
+            page_count = inspect_pdf_page_count(pdf_path)
+            if page_count > STUDY_MAX_PAGES:
+                raise ValueError(f"PDF exceeds the {STUDY_MAX_PAGES}-page study limit")
+            initial_page = int(self._decode_field(fields, b"initial_page") or 1)
+            initial_page = max(1, min(initial_page, page_count))
+            document_status.update({
+                "status": "processing",
+                "page_count": page_count,
+                "initial_page": initial_page,
+                "error": "",
+            })
+            self._rdb.set(
+                status_key,
+                json.dumps(document_status, ensure_ascii=False),
+                ex=STUDY_RESULT_TTL_SECONDS,
+            )
+
+            for page_number in range(1, page_count + 1):
+                result_key = f"{status_key}:page:{page_number}:layout"
+                if self._rdb.exists(result_key):
+                    continue
+                page_status_key = f"{status_key}:page:{page_number}:status"
+                self._rdb.set(
+                    page_status_key,
+                    json.dumps({"status": "queued"}),
+                    ex=STUDY_RESULT_TTL_SECONDS,
+                    nx=True,
+                )
+                target_stream = STREAM_HIGH if page_number == initial_page else STREAM_LOW
+                self._rdb.xadd(target_stream, {
+                    "task_type": "study_page",
+                    "document_id": document_id,
+                    "page_number": str(page_number),
+                })
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "processed"
+        except Exception as exc:
+            log.exception("Could not ingest study PDF %s", document_id)
+            document_status.update({"status": "failed", "error": str(exc)})
+            self._rdb.set(
+                status_key,
+                json.dumps(document_status, ensure_ascii=False),
+                ex=STUDY_RESULT_TTL_SECONDS,
+            )
+            try:
+                os.remove(pdf_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.warning("Could not remove failed study PDF %s", document_id, exc_info=True)
+            self._rdb.xack(stream, self.consumer_group, msg_id)
+            return "skipped"
 
     def _defer_stale_interactive_job(self, stream: str, msg_id: bytes,
                                      fields: dict, job_id: str) -> bool:

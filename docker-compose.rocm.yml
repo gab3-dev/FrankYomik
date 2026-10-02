@@ -2,18 +2,52 @@
 # The main docker-compose.prod.yml already includes ROCm config.
 # This file is kept for local dev use only:
 #   docker compose -f docker-compose.yml -f docker-compose.rocm.yml up worker
+# API and worker mounts use server/cache so a host `cd server && go run .`
+# shares staged study PDFs with the container. Set APP_UID/APP_GID in .env to
+# match the host user when it is not 1000:1000.
 services:
+  init-perms:
+    volumes:
+      - ./server/cache:/data/cache
+    command:
+      ["sh", "-c", "chown -R ${APP_UID:-1000}:${APP_GID:-1000} /data/cache"]
+
+  api:
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - ./server/cache:/data/cache
+
+  ollama:
+    image: ollama/ollama:rocm
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    # ROCm is exposed by direct device mounts. Reset the base Compose
+    # vendor reservation, which asks Docker CDI to discover a GPU vendor.
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []
+
   worker:
     image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
+    environment:
+      APP_UID: ${APP_UID:-1000}
+      APP_GID: ${APP_GID:-1000}
+      HSA_OVERRIDE_GFX_VERSION: "11.5.1"
+      PYTORCH_ROCM_ARCH: "gfx1151"
     devices:
-      - /dev/kfd
-      - /dev/dri
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
     group_add:
       - "485"
       - "488"
     security_opt:
       - seccomp:unconfined
       - label:disable
-    environment:
-      HSA_OVERRIDE_GFX_VERSION: "11.5.1"
-      PYTORCH_ROCM_ARCH: "gfx1151"
+    volumes:
+      - ./server/cache:/app/server/cache
+    deploy:
+      resources:
+        reservations:
+          devices: !reset []

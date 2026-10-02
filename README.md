@@ -4,7 +4,7 @@
 
 # Frank Yomik
 
-Read Japanese and Korean comics — and Japanese novels — in the original, and look up only what you stumble on. Frank Yomik detects speech bubbles with RT-DETR-v2, reads them with OCR, translates with a local LLM (Ollama) or annotates them with furigana, and shows the result through a magnifier you hold over the page. Everything runs on your own hardware.
+Read Japanese and Korean comics — Japanese novels too — in the original, and look up only what you stumble on. Frank Yomik translates manga and webtoons or adds furigana, and now includes a PDF study reader with tap-to-look-up text and kanji. OCR and document extraction run on your own server; PDF reading and dictionary lookup stay on the device.
 
 <p align="center">
   <img src="docs/sample_translate.png" width="45%" alt="English translation sample">
@@ -46,8 +46,8 @@ distinguishable from broken.
 
 | Directory | Language | Description |
 |-----------|----------|-------------|
-| `server/` | Go + Python | API server, processing pipelines (manga, text books, webtoon), Redis worker |
-| `client/` | Dart/Flutter | Android + Linux reader app with WebView overlay |
+| `server/` | Go + Python | API server, image pipelines, study-PDF extraction/OCR workers |
+| `client/` | Dart/Flutter | Android + Linux reader app, WebView readers, local PDF study library |
 | `extension/` | JavaScript | Chromium MV3 extension for desktop Kindle/Naver reading |
 | `docs/` | — | Test images, screenshots, demo videos (Git LFS), deployment notes |
 
@@ -78,9 +78,23 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 
 **Web service**: Go API accepts images over HTTP, deduplicates via SHA256, queues through Redis Streams with priority ordering. Python workers process jobs and push results via Redis Pub/Sub + WebSocket.
 
+**Japanese study reader**: Import a PDF into the Flutter app. It keeps the
+original locally and uploads one temporary copy to the configured Frank Yomik
+server. The worker extracts character boxes from embedded PDF text or runs
+Japanese OCR for scanned pages. The page currently being read is high priority;
+other pages are processed in the background. The worker also attaches UniDic
+word lemmas/readings to the positioned text. It removes the uploaded PDF after
+page processing, while the app stores page layouts and reading progress locally.
+Tap a character to look up its containing word and kanji in the on-device
+SQLite dictionary. The dictionary is installed from the
+English-common JMdict and English KANJIDIC2 distributions; see
+`client/lib/services/local_japanese_dictionary.dart` for source attribution.
+JMdict remains under the [EDRDG license](https://www.edrdg.org/edrdg/licence.html);
+KANJIDIC2 is [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
 The protected debug API can also store original/translated page pairs uploaded from the Chromium extension. List recent pairs with `GET /api/v1/debug/pages`.
 
-**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and reveals the translation through a magnifier lens — the original page stays on screen and a 200ms press-and-hold peeks at the translated render underneath (1.5x/2x/3x), with full-page replacement available as a mode. The Chromium extension presents translations the same way. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching. Each Kindle volume remembers its own pipeline, so moving between a manga and a novel needs no setting changes.
+**Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and reveals translations through a magnifier lens. It also has a separate local PDF study library, searchable-text and scan support, and an offline dictionary lookup sheet. Existing site-reader translation modes remain available. The Chromium extension continues to present translations the same way as the app.
 
 **Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, and reveals the result through the same hold-to-peek magnifier. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
 
@@ -179,6 +193,19 @@ curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id
 curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id>/image -o result.png
 ```
 
+### Study a PDF
+
+```bash
+curl -X POST -H "Authorization: Bearer secret" \
+  -F "document=@my-japanese-book.pdf" \
+  -F "priority_page=1" \
+  http://localhost:8080/api/v1/study/documents
+```
+
+The response includes a `document_id`. The client uses it to fetch each page's
+OCR/text layout and to promote the page currently being read to high priority.
+The original PDF is staged only until page processing finishes, then removed.
+
 ## API
 
 | Method | Path | Description |
@@ -187,10 +214,20 @@ curl -H "Authorization: Bearer secret" http://localhost:8080/api/v1/jobs/<job_id
 | GET | `/api/v1/jobs/:id` | Poll job status and metadata |
 | GET | `/api/v1/jobs/:id/image` | Download processed image |
 | DELETE | `/api/v1/jobs/:id` | Cancel/delete a job |
+| POST | `/api/v1/study/documents` | Upload a PDF for temporary text extraction/OCR |
+| GET | `/api/v1/study/documents/:id` | Read study-document processing status |
+| GET | `/api/v1/study/documents/:id/pages/:page` | Fetch a page's text and normalized glyph coordinates |
+| POST | `/api/v1/study/documents/:id/pages/:page/prioritize` | Prioritize the page currently being read |
 | GET | `/api/v1/health` | Server + worker + queue status |
 | WS | `/api/v1/ws` | Real-time result push |
 
 All endpoints except `/health` require `Authorization: Bearer <token>`.
+
+Study uploads default to a 100 MiB maximum (`STUDY_PDF_MAX_SIZE_MB`). The
+temporary PDF is removed after every page task finishes, or after a worker
+failure; startup cleanup removes staged PDFs left behind for more than seven
+days. Page layouts are transient Redis delivery data (24-hour TTL), and the
+Flutter app caches layouts locally.
 
 Pipelines: `manga_translate`, `manga_furigana`, `book_furigana`, `webtoon`. Priority: `high` (default) or `low` (prefetch).
 

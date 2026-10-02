@@ -37,5 +37,8 @@ deep-translator>=1.11,<2
 # Naver Webtoon scraping
 nodriver>=0.50,<1
 
+# PDF text extraction, page rendering, and scan inspection
+pypdfium2>=5.13,<6
+
 # Tests
 pytest>=9.0,<10

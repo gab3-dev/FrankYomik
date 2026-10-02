@@ -889,3 +889,116 @@ class TestProcessMessageMetadata:
         assert job.rerender_from_metadata is True
         assert job.metadata_payload is not None
         assert job.metadata_payload["regions"][0]["id"] == "r1"
+
+
+class TestStudyTasks:
+    def test_duplicate_page_delivery_remains_pending_while_locked(self):
+        import json
+
+        document_id = "e" * 32
+        c = _make_consumer()
+        c._rdb.get.return_value = json.dumps({
+            "document_id": document_id,
+            "status": "processing",
+            "page_count": 1,
+        }).encode()
+        c._rdb.exists.return_value = 0
+        c._rdb.set.return_value = False
+
+        outcome = c._process_message(STREAM_HIGH, b"0-1", {
+            b"task_type": b"study_page",
+            b"document_id": document_id.encode(),
+            b"page_number": b"1",
+        })
+
+        assert outcome == "deferred"
+        c._rdb.xack.assert_not_called()
+
+    def test_study_ingest_queues_initial_page_high_and_remaining_pages_low(
+        self, tmp_path,
+    ):
+        import json
+
+        from worker.consumer import STUDY_DOCUMENT_PREFIX
+
+        document_id = "a" * 32
+        pdf_path = tmp_path / "study" / "incoming" / f"{document_id}.pdf"
+        pdf_path.parent.mkdir(parents=True)
+        pdf_path.write_bytes(b"%PDF-test")
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._rdb.get.return_value = json.dumps({
+            "document_id": document_id,
+            "status": "queued",
+            "page_count": 0,
+            "completed_pages": 0,
+            "initial_page": 2,
+        }).encode()
+        c._rdb.exists.return_value = 0
+
+        with patch("worker.study_pdf.inspect_pdf_page_count", return_value=3):
+            outcome = c._process_message(STREAM_HIGH, b"1-0", {
+                b"task_type": b"study_ingest",
+                b"document_id": document_id.encode(),
+                b"initial_page": b"2",
+            })
+
+        assert outcome == "processed"
+        queued = c._rdb.xadd.call_args_list
+        assert len(queued) == 3
+        assert queued[0].args[0] == STREAM_LOW
+        assert queued[1].args[0] == STREAM_HIGH
+        assert queued[2].args[0] == STREAM_LOW
+        assert all(
+            call.args[1]["task_type"] == "study_page" for call in queued
+        )
+        assert c._rdb.set.call_args_list[0].args[0] == (
+            f"{STUDY_DOCUMENT_PREFIX}{document_id}"
+        )
+
+    def test_study_page_persists_layout_and_removes_pdf_when_last_page_finishes(
+        self, tmp_path,
+    ):
+        import json
+
+        from worker.consumer import STUDY_DOCUMENT_PREFIX
+
+        document_id = "b" * 32
+        pdf_path = tmp_path / "study" / "incoming" / f"{document_id}.pdf"
+        pdf_path.parent.mkdir(parents=True)
+        pdf_path.write_bytes(b"%PDF-test")
+        c = _make_consumer(cache_dir=str(tmp_path))
+        c._rdb.get.return_value = json.dumps({
+            "document_id": document_id,
+            "status": "processing",
+            "page_count": 1,
+            "completed_pages": 0,
+            "initial_page": 1,
+        }).encode()
+        c._rdb.exists.return_value = 0
+        c._rdb.set.return_value = True
+        c._rdb.scard.return_value = 1
+
+        layout = {
+            "schema_version": 1,
+            "page_number": 1,
+            "source": "pdf_text",
+            "text": "日本",
+            "glyphs": [],
+        }
+        with patch("worker.study_pdf.inspect_pdf_page", return_value=layout):
+            outcome = c._process_message(STREAM_HIGH, b"2-0", {
+                b"task_type": b"study_page",
+                b"document_id": document_id.encode(),
+                b"page_number": b"1",
+            })
+
+        assert outcome == "processed"
+        layout_key = f"{STUDY_DOCUMENT_PREFIX}{document_id}:page:1:layout"
+        layout_call = [
+            item for item in c._rdb.set.call_args_list
+            if item.args[0] == layout_key
+        ]
+        assert len(layout_call) == 1
+        assert json.loads(layout_call[0].args[1])["text"] == "日本"
+        assert not pdf_path.exists()
+        c._rdb.xack.assert_called_once_with(STREAM_HIGH, "workers", b"2-0")

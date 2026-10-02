@@ -75,6 +75,12 @@ android {
 
 }
 
+dependencies {
+    // The Flutter plugin provides the platform channel; this installs the
+    // Japanese recognition model selected by TextRecognitionScript.japanese.
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+}
+
 flutter {
     source = "../.."
 }

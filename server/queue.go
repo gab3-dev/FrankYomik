@@ -173,6 +173,48 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	return jobID, false, nil
 }
 
+// SubmitStudyTask adds one PDF-ingest or page-layout task to the existing
+// priority streams. Study messages are handled separately from image jobs by
+// the worker and never enter the translation cache.
+func (q *Queue) SubmitStudyTask(ctx context.Context, taskType, documentID string,
+	pageNumber int, priority string) error {
+	if taskType != "study_ingest" && taskType != "study_page" {
+		return fmt.Errorf("invalid study task type: %s", taskType)
+	}
+	if !studyDocumentIDRe.MatchString(documentID) {
+		return fmt.Errorf("invalid study document id")
+	}
+
+	stream := streamHigh
+	maxLen := q.maxLenHigh
+	if priority == "low" {
+		stream = streamLow
+		maxLen = q.maxLenLow
+	} else if priority != "high" {
+		return fmt.Errorf("invalid priority: %s", priority)
+	}
+
+	values := map[string]interface{}{
+		"task_type":   taskType,
+		"document_id": documentID,
+	}
+	if taskType == "study_page" {
+		if pageNumber < 1 {
+			return fmt.Errorf("invalid study page number")
+		}
+		values["page_number"] = strconv.Itoa(pageNumber)
+	} else if pageNumber > 0 {
+		values["initial_page"] = strconv.Itoa(pageNumber)
+	}
+
+	return q.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: stream,
+		MaxLen: maxLen,
+		Approx: true,
+		Values: values,
+	}).Err()
+}
+
 type latestMarker struct {
 	key   string
 	group string

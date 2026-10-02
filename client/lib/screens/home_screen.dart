@@ -7,6 +7,7 @@ import '../widgets/connection_banner.dart';
 import 'reader_screen.dart';
 import 'settings_screen.dart';
 import 'jobs_screen.dart';
+import 'study_library_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -60,6 +61,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       appBar: AppBar(
         title: const Text('Frank Yomik'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.school_outlined),
+            tooltip: 'Japanese Study PDFs',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const StudyLibraryScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.list_alt),
             tooltip: 'Jobs',

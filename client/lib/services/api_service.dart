@@ -114,6 +114,108 @@ class ApiService {
     return response.bodyBytes;
   }
 
+  /// Upload one complete PDF for OCR/layout extraction. The server owns only a
+  /// temporary copy while its study-page tasks run; the client retains the
+  /// original document locally.
+  Future<Map<String, dynamic>> uploadStudyDocument({
+    required ServerSettings settings,
+    required String pdfPath,
+    int priorityPage = 1,
+  }) async {
+    final uri = Uri.parse('${settings.serverUrl}/api/v1/study/documents');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers.addAll(_headers(settings))
+      ..fields['priority_page'] = priorityPage.toString()
+      ..files.add(
+        await http.MultipartFile.fromPath(
+          'document',
+          pdfPath,
+          filename: 'study.pdf',
+        ),
+      );
+
+    final result = await (() async {
+      final response = await _client
+          .send(request)
+          .timeout(const Duration(minutes: 5));
+      final body = await response.stream.bytesToString().timeout(
+        const Duration(seconds: 30),
+      );
+      return (response.statusCode, body);
+    })();
+    if (result.$1 != 202) {
+      throw ApiException(
+        'PDF upload failed (${result.$1}): ${result.$2}',
+        statusCode: result.$1,
+        retryable: result.$1 >= 500,
+      );
+    }
+    return jsonDecode(result.$2) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getStudyDocumentStatus({
+    required ServerSettings settings,
+    required String serverDocumentId,
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/study/documents/$serverDocumentId',
+    );
+    final response = await _client
+        .get(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Study document status failed (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Returns null while OCR is queued or in progress.
+  Future<Map<String, dynamic>?> getStudyPageLayout({
+    required ServerSettings settings,
+    required String serverDocumentId,
+    required int pageNumber,
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/study/documents/$serverDocumentId/pages/$pageNumber',
+    );
+    final response = await _client
+        .get(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 20));
+    if (response.statusCode == 202) return null;
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Study page layout failed (${response.statusCode}): ${response.body}',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<void> prioritizeStudyPage({
+    required ServerSettings settings,
+    required String serverDocumentId,
+    required int pageNumber,
+  }) async {
+    final uri = Uri.parse(
+      '${settings.serverUrl}/api/v1/study/documents/$serverDocumentId/pages/$pageNumber/prioritize',
+    );
+    final response = await _client
+        .post(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 202 && response.statusCode != 200) {
+      throw ApiException(
+        'Could not prioritize study page (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+  }
+
   /// Check server health (no auth required).
   Future<Map<String, dynamic>> getHealth(ServerSettings settings) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/health');
