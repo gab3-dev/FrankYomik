@@ -209,7 +209,7 @@ class StudyLibraryService {
       whereArgs: [documentId, page],
       orderBy: 'created_at ASC',
     );
-    return rows.map(StudyMlKitCrop.fromRow).toList(growable: false);
+    return rows.map(StudyMlKitCrop.fromRow).toList();
   }
 
   Future<void> saveMlKitCrop(StudyMlKitCrop crop) => _db.insert(

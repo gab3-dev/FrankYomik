@@ -97,6 +97,8 @@ void main() {
     expect(saved.single.text, '日本語');
     expect(saved.single.left, 0.1);
     expect(saved.single.bottom, 0.7);
+    saved.add(crop);
+    expect(saved, hasLength(2));
     expect(await library.getMlKitCrops('document', 4), isEmpty);
   });
 }
