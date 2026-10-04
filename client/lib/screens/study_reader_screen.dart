@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +28,10 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
   int _pageNumber = 1;
   int? _pageCount;
   bool _installingDictionary = false;
+  bool _cropMode = false;
+  int? _cropSelectionPage;
+  Offset? _cropSelectionStart;
+  Rect? _cropSelection;
   _PendingCrop? _pendingCrop;
   String? _status;
 
@@ -74,7 +77,13 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
 
   void _onPageChanged(int? pageNumber) {
     if (pageNumber == null) return;
-    setState(() => _pageNumber = pageNumber);
+    setState(() {
+      _pageNumber = pageNumber;
+      _cropMode = false;
+      _cropSelectionPage = null;
+      _cropSelectionStart = null;
+      _cropSelection = null;
+    });
     _saveProgress(pageNumber);
     unawaited(_loadCrops(pageNumber));
   }
@@ -108,17 +117,65 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
       _showMessage('ML Kit Japanese OCR is available on Android and iOS only.');
       return;
     }
-    final crop = await showDialog<Rect>(
-      context: context,
-      builder: (_) => _CropPageDialog(
-        extractor: MlKitJapaneseTextExtractor(),
-        pdfPath: widget.document.path,
-        pageNumber: _pageNumber,
-      ),
-    );
-    if (crop == null || !mounted) return;
+    setState(() {
+      _cropMode = true;
+      _cropSelectionPage = null;
+      _cropSelectionStart = null;
+      _cropSelection = null;
+    });
+  }
 
-    final page = _pageNumber;
+  void _cancelCrop() {
+    setState(() {
+      _cropMode = false;
+      _cropSelectionPage = null;
+      _cropSelectionStart = null;
+      _cropSelection = null;
+    });
+  }
+
+  void _beginCropSelection(int pageNumber, Offset position, Size pageSize) {
+    final point = _normalizedPoint(position, pageSize);
+    setState(() {
+      _cropSelectionPage = pageNumber;
+      _cropSelectionStart = point;
+      _cropSelection = Rect.fromPoints(point, point);
+    });
+  }
+
+  void _updateCropSelection(int pageNumber, Offset position, Size pageSize) {
+    final start = _cropSelectionStart;
+    if (start == null || _cropSelectionPage != pageNumber) return;
+    setState(() {
+      _cropSelection = Rect.fromPoints(
+        start,
+        _normalizedPoint(position, pageSize),
+      );
+    });
+  }
+
+  void _finishCropSelection(int pageNumber, Size pageSize) {
+    final crop = _cropSelection;
+    if (crop == null || _cropSelectionPage != pageNumber) return;
+    if (crop.width * pageSize.width < 18 ||
+        crop.height * pageSize.height < 18) {
+      setState(() {
+        _cropSelectionStart = null;
+        _cropSelection = null;
+      });
+      _showMessage('Drag a larger rectangle around the text.');
+      return;
+    }
+    _cancelCrop();
+    unawaited(_readCrop(pageNumber, crop));
+  }
+
+  Offset _normalizedPoint(Offset position, Size pageSize) => Offset(
+    (position.dx / pageSize.width).clamp(0, 1).toDouble(),
+    (position.dy / pageSize.height).clamp(0, 1).toDouble(),
+  );
+
+  Future<void> _readCrop(int page, Rect crop) async {
     setState(() => _pendingCrop = _PendingCrop(pageNumber: page, rect: crop));
     try {
       final text = await MlKitJapaneseTextExtractor().extractCrop(
@@ -177,6 +234,20 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
             crop: crop,
             isPending: pending?.matches(crop) ?? false,
             onTap: (index) => unawaited(_showLookup(crop.text, index)),
+          ),
+        ),
+      if (_cropMode && page.pageNumber == _pageNumber)
+        Positioned.fill(
+          child: _CropSelectionOverlay(
+            selection: _cropSelectionPage == page.pageNumber
+                ? _cropSelection
+                : null,
+            onStart: (position) =>
+                _beginCropSelection(page.pageNumber, position, pageRect.size),
+            onUpdate: (position) =>
+                _updateCropSelection(page.pageNumber, position, pageRect.size),
+            onEnd: () => _finishCropSelection(page.pageNumber, pageRect.size),
+            onCancel: _cancelCrop,
           ),
         ),
     ];
@@ -267,9 +338,9 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Crop Japanese text',
-            icon: const Icon(Icons.crop),
-            onPressed: _startCrop,
+            tooltip: _cropMode ? 'Cancel crop' : 'Crop Japanese text',
+            icon: Icon(_cropMode ? Icons.close : Icons.crop),
+            onPressed: _cropMode ? _cancelCrop : _startCrop,
           ),
         ],
       ),
@@ -321,7 +392,9 @@ class _StudyReaderScreenState extends ConsumerState<StudyReaderScreen> {
                   ),
                   const Spacer(),
                   Text(
-                    'Crop text, then tap it for a dictionary lookup',
+                    _cropMode
+                        ? 'Drag around a speech bubble or text area'
+                        : 'Crop text, then tap it for a dictionary lookup',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -353,6 +426,60 @@ class _PendingCrop {
   );
 
   bool matches(StudyMlKitCrop crop) => crop.id == -1;
+}
+
+class _CropSelectionOverlay extends StatelessWidget {
+  final Rect? selection;
+  final ValueChanged<Offset> onStart;
+  final ValueChanged<Offset> onUpdate;
+  final VoidCallback onEnd;
+  final VoidCallback onCancel;
+
+  const _CropSelectionOverlay({
+    required this.selection,
+    required this.onStart,
+    required this.onUpdate,
+    required this.onEnd,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (details) => onStart(details.localPosition),
+        onPanUpdate: (details) => onUpdate(details.localPosition),
+        onPanEnd: (_) => onEnd(),
+        onPanCancel: onCancel,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.08),
+              ),
+            ),
+            if (selection != null)
+              Positioned.fromRect(
+                rect: Rect.fromLTRB(
+                  selection!.left * constraints.maxWidth,
+                  selection!.top * constraints.maxHeight,
+                  selection!.right * constraints.maxWidth,
+                  selection!.bottom * constraints.maxHeight,
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.lightBlueAccent.withValues(alpha: 0.2),
+                    border: Border.all(color: Colors.lightBlueAccent, width: 2),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _CropTextOverlay extends StatelessWidget {
@@ -422,171 +549,6 @@ class _CropTextOverlay extends StatelessWidget {
           child: content,
         );
       },
-    );
-  }
-}
-
-class _CropPageDialog extends StatefulWidget {
-  final MlKitJapaneseTextExtractor extractor;
-  final String pdfPath;
-  final int pageNumber;
-
-  const _CropPageDialog({
-    required this.extractor,
-    required this.pdfPath,
-    required this.pageNumber,
-  });
-
-  @override
-  State<_CropPageDialog> createState() => _CropPageDialogState();
-}
-
-class _CropPageDialogState extends State<_CropPageDialog> {
-  late final Future<MlKitRenderedPage> _preview;
-  Offset? _start;
-  Rect? _selection;
-  Size? _imageSize;
-
-  @override
-  void initState() {
-    super.initState();
-    _preview = widget.extractor.renderPreview(
-      pdfPath: widget.pdfPath,
-      pageNumber: widget.pageNumber,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      child: SizedBox(
-        width: 680,
-        height: MediaQuery.sizeOf(context).height * 0.85,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Crop Japanese text',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Drag a rectangle around one speech bubble or text area.',
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: FutureBuilder<MlKitRenderedPage>(
-                  future: _preview,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return Center(child: Text('${snapshot.error}'));
-                    }
-                    if (!snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final page = snapshot.data!;
-                    return LayoutBuilder(
-                      builder: (context, constraints) {
-                        final aspect = page.width / page.height;
-                        final height = math.min(
-                          constraints.maxHeight,
-                          constraints.maxWidth / aspect,
-                        );
-                        final size = Size(height * aspect, height);
-                        _imageSize = size;
-                        return Center(
-                          child: SizedBox(
-                            width: size.width,
-                            height: size.height,
-                            child: GestureDetector(
-                              onPanStart: (details) => setState(() {
-                                _start = details.localPosition;
-                                _selection = Rect.fromPoints(_start!, _start!);
-                              }),
-                              onPanUpdate: (details) => setState(() {
-                                final start = _start;
-                                if (start == null) return;
-                                _selection = Rect.fromPoints(
-                                  start,
-                                  Offset(
-                                    details.localPosition.dx
-                                        .clamp(0, size.width)
-                                        .toDouble(),
-                                    details.localPosition.dy
-                                        .clamp(0, size.height)
-                                        .toDouble(),
-                                  ),
-                                );
-                              }),
-                              child: Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  Image.memory(page.pngBytes, fit: BoxFit.fill),
-                                  if (_selection != null)
-                                    Positioned.fromRect(
-                                      rect: _selection!,
-                                      child: DecoratedBox(
-                                        decoration: BoxDecoration(
-                                          color: Colors.lightBlueAccent
-                                              .withValues(alpha: 0.2),
-                                          border: Border.all(
-                                            color: Colors.lightBlueAccent,
-                                            width: 2,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _normalizedSelection == null
-                        ? null
-                        : () => Navigator.of(context).pop(_normalizedSelection),
-                    child: const Text('Read crop'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Rect? get _normalizedSelection {
-    final selection = _selection;
-    final size = _imageSize;
-    if (selection == null ||
-        size == null ||
-        selection.width < 18 ||
-        selection.height < 18) {
-      return null;
-    }
-    return Rect.fromLTRB(
-      (selection.left / size.width).clamp(0, 1),
-      (selection.top / size.height).clamp(0, 1),
-      (selection.right / size.width).clamp(0, 1),
-      (selection.bottom / size.height).clamp(0, 1),
     );
   }
 }

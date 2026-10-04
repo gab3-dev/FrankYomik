@@ -13,29 +13,6 @@ import 'package:pdfrx/pdfrx.dart';
 class MlKitJapaneseTextExtractor {
   static bool get isSupported => Platform.isAndroid || Platform.isIOS;
 
-  Future<MlKitRenderedPage> renderPreview({
-    required String pdfPath,
-    required int pageNumber,
-  }) async {
-    final document = await PdfDocument.openFile(pdfPath);
-    PdfImage? pageImage;
-    try {
-      final page = _pageAt(document, pageNumber);
-      final scale = math.min(1.5, 1600 / math.max(page.width, page.height));
-      pageImage = await page.render(
-        fullWidth: page.width * scale,
-        fullHeight: page.height * scale,
-      );
-      if (pageImage == null) {
-        throw StateError('Could not render PDF page for crop selection.');
-      }
-      return _toRenderedPage(pageImage);
-    } finally {
-      pageImage?.dispose();
-      await document.dispose();
-    }
-  }
-
   Future<String> extractCrop({
     required String pdfPath,
     required int pageNumber,
@@ -74,7 +51,6 @@ class MlKitJapaneseTextExtractor {
         throw StateError('Could not render PDF crop for ML Kit OCR.');
       }
 
-      final rendered = _toRenderedPage(pageImage);
       final directory = await getTemporaryDirectory();
       inputFile = File(
         p.join(
@@ -82,7 +58,7 @@ class MlKitJapaneseTextExtractor {
           'frank-yomik-mlkit-crop-$pageNumber-${DateTime.now().microsecondsSinceEpoch}.png',
         ),
       );
-      await inputFile.writeAsBytes(rendered.pngBytes, flush: true);
+      await inputFile.writeAsBytes(_toPngBytes(pageImage), flush: true);
 
       recognizer = TextRecognizer(script: TextRecognitionScript.japanese);
       final result = await recognizer.processImage(
@@ -115,7 +91,7 @@ class MlKitJapaneseTextExtractor {
     return document.pages[pageNumber - 1];
   }
 
-  MlKitRenderedPage _toRenderedPage(PdfImage image) {
+  Uint8List _toPngBytes(PdfImage image) {
     final rendered = img.Image.fromBytes(
       width: image.width,
       height: image.height,
@@ -124,22 +100,6 @@ class MlKitJapaneseTextExtractor {
       numChannels: 4,
       order: img.ChannelOrder.bgra,
     );
-    return MlKitRenderedPage(
-      pngBytes: Uint8List.fromList(img.encodePng(rendered)),
-      width: rendered.width,
-      height: rendered.height,
-    );
+    return Uint8List.fromList(img.encodePng(rendered));
   }
-}
-
-class MlKitRenderedPage {
-  final Uint8List pngBytes;
-  final int width;
-  final int height;
-
-  const MlKitRenderedPage({
-    required this.pngBytes,
-    required this.width,
-    required this.height,
-  });
 }
